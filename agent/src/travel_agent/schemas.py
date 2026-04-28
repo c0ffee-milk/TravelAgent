@@ -4,40 +4,6 @@
 当前先不要实现完整模型，先通过下面的注释理解最终 Agent 需要哪些对象。
 """
 
-# 待办（第 00 课）：定义 TravelRequest。
-# 它应该表示一次旅行规划任务：
-# - destination：目标城市/国家/区域，或候选目的地
-# - origin：出发城市
-# - date_range：明确日期或模糊时间范围
-# - days：旅行天数
-# - travelers：出行人数和关系
-# - budget：总预算
-# - budget_scope：预算是否包含机票、酒店等大项
-# - pace：轻松 / 适中 / 紧凑
-# - themes：美食、亲子、自然、文化、购物等主题偏好
-# - constraints：签证、体力、饮食禁忌、交通限制等约束
-
-# 待办（第 00 课）：定义 TravelerProfile。
-# 它应该保存用户长期偏好：
-# - 酒店偏好
-# - 饮食偏好
-# - 步行耐受程度
-# - 安全偏好
-# - 语言能力
-# - 反复出现的限制条件
-
-# 待办（第 00 课）：定义 Destination 和 POI。
-# 这些对象后续会承接地图工具、RAG 和 mock 数据集返回的信息。
-
-# 待办（第 00 课）：定义 Itinerary 和 BudgetEstimate。
-# 这些对象用于描述最终旅行方案和费用拆分。
-
-# 待办（第 00 课）：定义 RiskReport。
-# 该对象用于收集天气、交通、安全、签证和疲劳风险。
-
-# 待办（第 00 课）：定义 EvaluationResult。
-# 该对象后续用于支持对生成方案的自动质量检查。
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
