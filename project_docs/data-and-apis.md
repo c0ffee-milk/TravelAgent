@@ -4,7 +4,7 @@ TravelAgent 按真实 API 优先设计，但当前阶段不实现任何调用代
 
 ## 环境变量
 
-配置样例见 [configs/.env.example](../configs/.env.example)。
+配置样例见 [agent/configs/.env.example](../agent/configs/.env.example)。
 
 | 变量 | 用途 |
 | --- | --- |
@@ -92,4 +92,3 @@ DEEPSEEK_MODEL=deepseek-chat
 - 便于演示 API 失败时的降级逻辑。
 
 mock 数据只放固定示例，不伪装成实时真实结果。
-

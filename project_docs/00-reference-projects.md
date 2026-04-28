@@ -111,7 +111,7 @@ Hugging Face Agents Course 将课程分为 4 个单元：Agent 基础、框架�
 
 ### 可借鉴点
 
-- TravelAgent 应采用 `lessons/lesson_xx_topic/README.md + code + exercises` 的结构。
+- TravelAgent 应采用 `course/lesson_xx_topic.md` 的教学指导书结构，并将完整 Agent 工程代码放在 `agent/` 中。
 - 每章都要有“学习目标、业务任务、核心概念、运行方式、练习、验收标准”。
 - 生产化、可信、安全、浏览器自动化等内容应作为后半程重点。
 
@@ -144,4 +144,3 @@ Hugging Face Agents Course 将课程分为 4 个单元：Agent 基础、框架�
 5. 每章可评估：从结构化输出、工具调用正确率、约束满足率开始，逐步加入自动评估。
 6. 保留排障材料：API key、模型兼容、依赖安装、网络失败、工具超时都要有说明。
 7. 最终项目导向：最终交付一个完整旅行 Agent，并用固定 benchmark 做验收。
-

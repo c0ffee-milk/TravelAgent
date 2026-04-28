@@ -55,12 +55,12 @@ TravelAgent 的业务主线是“从自然语言旅行需求到可执行旅行�
 
 建议第一版内置 mock 数据，避免一开始依赖真实外部 API：
 
-- `data/mock/weather.json`：天气查询结果。
-- `data/mock/exchange_rates.json`：汇率。
-- `data/mock/places.json`：目的地和景点。
-- `data/mock/hotels.json`：酒店档位。
-- `data/mock/transport.json`：交通耗时和费用。
-- `data/eval/travel_requests.jsonl`：评估任务。
+- `agent/data/mock/weather.json`：天气查询结果。
+- `agent/data/mock/exchange_rates.json`：汇率。
+- `agent/data/mock/places.json`：目的地和景点。
+- `agent/data/mock/hotels.json`：酒店档位。
+- `agent/data/mock/transport.json`：交通耗时和费用。
+- `agent/data/eval/travel_requests.jsonl`：评估任务。
 
 ## 样例评估任务
 
@@ -69,4 +69,3 @@ TravelAgent 的业务主线是“从自然语言旅行需求到可执行旅行�
 {"id":"family_yunnan_7d","query":"暑假带 8 岁孩子和父母去云南 7 天，想安全轻松，预算 18000。","constraints":{"days":7,"budget_cny":18000,"travelers":4,"risk_level":"low"}}
 {"id":"business_shanghai_2d","query":"下个月上海出差，空出两天，想安排城市漫步和好吃的。","constraints":{"days":2,"theme":["city walk","food"]}}
 ```
-

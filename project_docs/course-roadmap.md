@@ -1,6 +1,6 @@
 # 课程路线
 
-当前阶段只规划 lesson，不实现任何 lesson 代码。
+课程文本放在 `course/` 下，每节课直接对应一个 Markdown 指导书。完整 Agent 实现逐步沉淀到 `agent/`。
 
 | Lesson | 主题 | 业务能力 | Agent 技术 | 产物边界 |
 | --- | --- | --- | --- | --- |
@@ -19,18 +19,14 @@
 
 ## 每个 lesson 的标准产物
 
-后续生成具体 lesson 时，默认包含：
+后续生成具体 lesson 时，默认创建或更新：
 
-- `README.md`：学习入口。
-- `lesson_plan.md`：课案和讲解顺序。
-- `code/`：本课代码。
-- `exercises.md`：练习。
-- `acceptance.md`：验收标准。
+- `course/lesson_xx_topic_name.md`：面向学习者的搭建指导书。
+- `agent/` 中对应模块：添加或更新注释、TODO、接口边界或实现。
 
 ## 课程约束
 
 - 每个 lesson 必须服务同一个旅游规划业务。
 - 每个 lesson 只能引入当前阶段必要的技术。
-- 具体代码只在用户要求生成该 lesson 时创建。
+- 每个 lesson 都应该说明它对 `agent/` 的增量影响。
 - 后续 lesson 可以使用 mock fallback，但架构按真实 API 优先设计。
-
