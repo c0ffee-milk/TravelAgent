@@ -17,6 +17,9 @@ agent/
       README.md
       schemas.py
       clarification.py
+      llm_provider.py
+  tests/
+    test_llm_provider.py
   data/
     README.md
     mock/
@@ -42,7 +45,8 @@ agent/
 
 - Lesson 00 对应 `src/travel_agent/schemas.py`。
 - Lesson 01 对应 `src/travel_agent/clarification.py`。
+- Lesson 02 对应 `src/travel_agent/llm_provider.py`。
 
-这些文件里的 TODO 是搭建指引，不是最终实现。
+课程代码会从基础封装开始逐步变成最终实现；测试优先覆盖不需要外部 API 的本地行为。
 
 教学文本位于 `../course/`，项目说明位于 `../project_docs/`。
