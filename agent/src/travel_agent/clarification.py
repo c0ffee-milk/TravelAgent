@@ -269,6 +269,9 @@ def is_ready_for_planning(request: TravelRequest, missing_fields: list[str]) -> 
     if request.budget is None:
         return False
 
+    if request.budget_scope == BudgetScope.UNKNOWN:
+        return False
+
     return True
 
 
@@ -331,6 +334,5 @@ def has_sensitive_travel_context(request: TravelRequest) -> bool:
     ]
 
     return any(keyword in text for keyword in sensitive_keywords)
-
 
 

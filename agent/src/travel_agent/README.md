@@ -9,5 +9,6 @@
 - `schemas.py`：第 00 课的业务对象建模锚点。
 - `clarification.py`：第 01 课的需求澄清流程锚点。
 - `llm_provider.py`：第 02 课的 DeepSeek/OpenAI-compatible 调用封装。
+- `map_tools.py`：第 03 课的高德地图工具层锚点。
 
 这些文件会随着课程逐步从注释和基础封装演进为完整 Agent 实现。

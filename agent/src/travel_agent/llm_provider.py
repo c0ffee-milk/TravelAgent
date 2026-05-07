@@ -94,6 +94,8 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import error, request
@@ -116,12 +118,15 @@ class LLMConfig:
     base_url: str = DEFAULT_DEEPSEEK_BASE_URL
     model: str = DEFAULT_DEEPSEEK_MODEL
     timeout_seconds: float = 30.0
+    max_retries: int = 2
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
         api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         base_url = os.getenv("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL).strip()
         model = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL).strip()
+        timeout_seconds = parse_float_env("DEEPSEEK_TIMEOUT_SECONDS", default=30.0)
+        max_retries = parse_int_env("DEEPSEEK_MAX_RETRIES", default=2)
 
         if not api_key:
             raise LLMConfigurationError("缺少环境变量 DEEPSEEK_API_KEY。")
@@ -129,8 +134,18 @@ class LLMConfig:
             raise LLMConfigurationError("环境变量 DEEPSEEK_BASE_URL 不能为空。")
         if not model:
             raise LLMConfigurationError("环境变量 DEEPSEEK_MODEL 不能为空。")
+        if timeout_seconds <= 0:
+            raise LLMConfigurationError("环境变量 DEEPSEEK_TIMEOUT_SECONDS 必须大于 0。")
+        if max_retries < 0:
+            raise LLMConfigurationError("环境变量 DEEPSEEK_MAX_RETRIES 不能小于 0。")
 
-        return cls(api_key=api_key, base_url=base_url.rstrip("/"), model=model)
+        return cls(
+            api_key=api_key,
+            base_url=base_url.rstrip("/"),
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
 
     @property
     def chat_completions_url(self) -> str:
@@ -195,16 +210,66 @@ class DeepSeekChatClient:
             method="POST",
         )
 
-        try:
-            with self._urlopen(http_request, timeout=self.config.timeout_seconds) as response:
-                response_body = response.read().decode("utf-8")
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise LLMProviderError(f"LLM HTTP 请求失败：{exc.code} {detail}") from exc
-        except error.URLError as exc:
-            raise LLMProviderError(f"LLM 网络请求失败：{exc.reason}") from exc
+        response_body = self._send_with_retries(http_request)
 
         return parse_chat_completion_response(response_body)
+
+    def _send_with_retries(self, http_request: request.Request) -> str:
+        """发送请求，并对网络抖动做有限重试。"""
+
+        last_error: BaseException | None = None
+
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                with self._urlopen(
+                    http_request,
+                    timeout=self.config.timeout_seconds,
+                ) as response:
+                    return response.read().decode("utf-8")
+            except error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if not is_retryable_http_error(exc.code) or attempt >= self.config.max_retries:
+                    raise LLMProviderError(f"LLM HTTP 请求失败：{exc.code} {detail}") from exc
+                last_error = exc
+            except (error.URLError, TimeoutError, socket.timeout) as exc:
+                if attempt >= self.config.max_retries:
+                    reason = getattr(exc, "reason", exc)
+                    raise LLMProviderError(f"LLM 网络请求失败：{reason}") from exc
+                last_error = exc
+
+            time.sleep(min(2**attempt, 4))
+
+        raise LLMProviderError(f"LLM 请求失败：{last_error}") from last_error
+
+
+def parse_float_env(name: str, default: float) -> float:
+    """读取 float 类型环境变量。"""
+
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise LLMConfigurationError(f"环境变量 {name} 必须是数字。") from exc
+
+
+def parse_int_env(name: str, default: int) -> int:
+    """读取 int 类型环境变量。"""
+
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise LLMConfigurationError(f"环境变量 {name} 必须是整数。") from exc
+
+
+def is_retryable_http_error(status_code: int) -> bool:
+    """判断 HTTP 错误是否适合重试。"""
+
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
 
 def parse_chat_completion_response(response_body: str) -> LLMResponse:
     try:
@@ -230,31 +295,89 @@ def parse_json_object(content: str) -> dict[str, Any]:
 
     return parsed
 
-def build_travel_request_extraction_messages(raw_query: str) -> list[LLMMessage]:
+def build_travel_request_extraction_messages(
+    raw_query: str,
+    current_date: str | None = None,
+    is_conversation: bool = False,
+) -> list[LLMMessage]:
+    """构造 TravelRequest 抽取消息。
+
+    参数：
+    - raw_query：用户原始需求，或多轮对话记录。
+    - current_date：当前日期，用于理解“明年”“下个月”“五一”等相对时间。
+    - is_conversation：raw_query 是否为多轮对话记录。
+    """
+
+    input_description = "多轮旅行需求对话" if is_conversation else "旅行需求"
+    state_instruction = (
+        "你需要从多轮对话记录中抽取最新 TravelRequest 状态。"
+        if is_conversation
+        else "你需要从用户原文中抽取 TravelRequest 草案。"
+    )
+    date_instruction = (
+        f"今天的日期是 {current_date}。遇到“明年”“下个月”“五一”等相对时间时，必须以今天为基准理解。"
+        if current_date
+        else ""
+    )
+    one_shot_example = """
+示例输入：
+用户：想在明年五一节跟我女朋友去东南亚旅游
+Agent 追问：你从哪个城市出发？这会影响交通时间和预算估算。
+用户回答：武汉
+Agent 追问：这次旅行计划安排几天？
+用户回答：7天左右
+Agent 追问：这次旅行总预算大概是多少？
+用户回答：两个人总预算 12000 到 16000
+Agent 追问：这个预算是否包含往返大交通和酒店？
+用户回答：包含机票和酒店
+Agent 追问：你希望行程节奏偏轻松、适中，还是紧凑多打卡？
+用户回答：轻松一点，主要想海岛、逛夜市、吃当地美食，不想每天换城市
+
+示例输出：
+{
+  "destination": "东南亚",
+  "origin": "武汉",
+  "date_range": "明年五一节期间",
+  "days": 7,
+  "travelers": 2,
+  "budget": "12000 到 16000",
+  "budget_scope": "include_transport_and_hotel",
+  "pace": "relaxed",
+  "themes": ["海岛", "夜市", "当地美食"],
+  "constraints": ["不想每天换城市"]
+}
+"""
+
     system_prompt = (
         "你是旅游规划 Agent 的需求理解模块。"
-        "请只根据用户原文抽取字段，不要编造用户没有提供的信息。"
+        f"{state_instruction}"
+        f"{date_instruction}"
+        "只抽取用户明确表达过的信息，不要编造。"
         "如果字段缺失，请使用 null 或空数组。"
-        "输出必须是一个 JSON 对象。"
+        "输出必须是一个 JSON 对象，不要输出 Markdown，不要解释，不要附加任何其他文本。"
     )
     user_prompt = f"""
-    请从下面的旅行需求中抽取 TravelRequest 草案。
+请从下面的{input_description}中抽取 TravelRequest 草案。
 
-    需要输出字段：
-    - destination
-    - origin
-    - date_range
-    - days
-    - travelers
-    - budget
-    - budget_scope
-    - pace
-    - themes
-    - constraints
+字段要求：
+- destination：目的地或候选目的地区域
+- origin：出发城市
+- date_range：出行时间；如果用户说“明年五一”，请写成“明年五一节期间”或对应年份的五一期间，不要丢失
+- days：旅行天数，数字
+- travelers：出行人数或同行关系
+- budget：预算；如果是区间，可以原样输出区间文本
+- budget_scope：预算覆盖范围，unknown / local_only / include_transport / include_transport_and_hotel
+- pace：旅行节奏，relaxed / balanced / compact，无法判断则 null
+- themes：旅行主题数组
+- constraints：真实限制条件数组；没有就输出空数组，不要输出 {{}} 或 ["{{}}"]
 
-    用户需求：
-    {raw_query}
-    """
+请严格参考下面的 one-shot 示例格式。示例只是格式参考，不要把示例内容当作当前用户需求。
+
+{one_shot_example}
+
+{input_description}：
+{raw_query}
+"""
     return [
         LLMMessage(role="system", content=system_prompt),
         LLMMessage(role="user", content=user_prompt),
