@@ -42,8 +42,7 @@
 
 ```text
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
 实现阶段应通过统一 Provider 接口封装模型调用，避免 lesson 代码直接绑定具体 SDK。
-

@@ -34,8 +34,14 @@ TravelAgent 按真实 API 优先设计，但当前阶段不实现任何调用代
 
 ```text
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
+
+说明：
+
+- `deepseek-v4-flash` 作为课程默认模型，适合需求抽取、澄清判断和常规 Agent 步骤。
+- `deepseek-v4-pro` 可作为后续复杂规划、审稿或评估任务的升级选项。
+- `deepseek-chat` 和 `deepseek-reasoner` 属于兼容别名，官方文档标注将在 2026-07-24 弃用。
 
 ## 高德地图 API
 

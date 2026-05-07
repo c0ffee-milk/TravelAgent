@@ -6,6 +6,7 @@
 
 - `lesson_00_project_bootstrap.md`：项目启动与业务建模。
 - `lesson_01_requirement_clarification.md`：需求澄清。
+- `lesson_02_llm_provider.md`：LLM Provider。
 
 ## 课程写法
 
@@ -26,6 +27,7 @@
 
 - Lesson 00：在 `agent/src/travel_agent/schemas.py` 中标注业务对象。
 - Lesson 01：在 `agent/src/travel_agent/clarification.py` 中标注需求澄清流程。
+- Lesson 02：在 `agent/src/travel_agent/llm_provider.py` 中封装 DeepSeek/OpenAI-compatible 调用。
 
 这些注释是搭建指引，不等于完整实现。
 
