@@ -44,7 +44,6 @@ class TravelRequest:
     themes: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
-    missing_fields: list[str] = field(default_factory=list)
 
 @dataclass
 class TravelerProfile:

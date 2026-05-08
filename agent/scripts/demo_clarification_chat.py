@@ -214,7 +214,6 @@ def merge_travel_request(
         themes=current.themes or previous.themes,
         constraints=current.constraints or previous.constraints,
         assumptions=previous.assumptions,
-        missing_fields=previous.missing_fields,
     )
 
 
