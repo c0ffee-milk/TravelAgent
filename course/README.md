@@ -5,8 +5,9 @@
 当前已创建：
 
 - `lesson_00_project_bootstrap.md`：项目启动与业务建模。
-- `lesson_01_requirement_clarification.md`：需求澄清。
-- `lesson_02_llm_provider.md`：LLM Provider。
+- `lesson_01_requirement_clarification.md`：LLM 驱动的自然需求澄清。
+- `lesson_02_llm_provider.md`：LLM Provider 与自然澄清生成。
+- `lesson_03_amap_tools.md`：高德地图工具。
 
 ## 课程写法
 
@@ -26,8 +27,9 @@
 当某节课引入新的工程模块时，应在 `agent/` 对应文件中留下清晰注释，说明学习者需要完成什么。例如：
 
 - Lesson 00：在 `agent/src/travel_agent/schemas.py` 中标注业务对象。
-- Lesson 01：在 `agent/src/travel_agent/clarification.py` 中标注需求澄清流程。
-- Lesson 02：在 `agent/src/travel_agent/llm_provider.py` 中封装 DeepSeek/OpenAI-compatible 调用。
+- Lesson 01：在 `agent/src/travel_agent/clarification.py` 中标注自然澄清状态。
+- Lesson 02：在 `agent/src/travel_agent/llm_provider.py` 中封装 DeepSeek/OpenAI-compatible 调用和自然澄清 prompt。
+- Lesson 03：在 `agent/src/travel_agent/map_tools.py` 中标注高德地图工具边界。
 
 这些注释是搭建指引，不等于完整实现。
 
