@@ -382,3 +382,126 @@ Agent 追问：你希望行程节奏偏轻松、适中，还是紧凑多打卡�
         LLMMessage(role="system", content=system_prompt),
         LLMMessage(role="user", content=user_prompt),
     ]
+
+
+def build_natural_clarification_messages(
+    transcript: str,
+    current_date: str | None = None,
+) -> list[LLMMessage]:
+    """构造 LLM 驱动的自然澄清消息。
+
+    这个 prompt 用于 Lesson 01/02 升级后的主流程：
+    - 不再只做固定槽位抽取。
+    - 同时输出事实、归一化字段、业务理解和下一步自然追问。
+    """
+
+    date_instruction = (
+        f"今天的日期是 {current_date}。所有相对时间必须以今天为基准理解。"
+        if current_date
+        else ""
+    )
+    system_prompt = (
+        "你是旅游规划 Agent 的需求理解与自然澄清模块。"
+        f"{date_instruction}"
+        "你的任务不是机械填表，而是像专业旅行顾问一样理解用户意图，"
+        "判断当前最值得确认的一件事。"
+        "你必须只根据对话记录抽取信息，不要编造用户没有表达过的事实。"
+        "输出必须是严格 JSON 对象，不要 Markdown，不要解释，不要附加其他文本。"
+    )
+    one_shot = """
+示例输入：
+用户：我明年3月份想去上海旅游
+Agent：你从哪个城市出发？这会影响交通时间和预算估算。
+用户：武汉
+Agent：这次大概安排几天？一个人去还是和家人朋友一起？
+用户：一个周，跟我父母一起
+Agent：预算大概是多少？
+用户：人均5000，包含路费和住宿
+
+示例输出：
+{
+  "facts": {
+    "destination": "上海",
+    "origin": "武汉",
+    "time": "明年3月份",
+    "duration": "一个周",
+    "companions": "我和父母",
+    "budget": "人均5000",
+    "budget_scope": "包含路费和住宿"
+  },
+  "normalized": {
+    "destination": "上海",
+    "origin": "武汉",
+    "date_range": "2027年3月",
+    "days": 7,
+    "travelers": 3,
+    "budget": 15000,
+    "budget_scope": "include_transport_and_hotel",
+    "pace": null,
+    "themes": [],
+    "constraints": []
+  },
+  "inferred": {
+    "traveler_group": "family_with_parents",
+    "budget_type": "per_person",
+    "estimated_total_budget": 15000,
+    "destination_granularity": "city",
+    "time_precision": "month",
+    "planning_focus": ["父母同行", "步行强度", "住宿位置"]
+  },
+  "missing_decisions": ["parents_mobility", "travel_style"],
+  "assumptions": ["暂未确认父母体力和步行接受度", "暂未确认行程节奏"],
+  "risks": ["父母同行时，行程过密可能影响体验"],
+  "next_action": {
+    "type": "ask",
+    "question": "带父母出行的话，我需要先确认他们的体力和步行接受度。你们希望整体轻松一点，还是可以接受每天多走一些？",
+    "reason": "父母同行会直接影响景点密度、交通方式和住宿位置"
+  },
+  "ready_for_planning": false
+}
+"""
+    user_prompt = f"""
+请根据下面的多轮旅行需求对话，输出一个自然澄清状态 JSON。
+
+输出字段必须包含：
+- facts：用户原话中的事实，尽量保留“人均”“跟父母”“下个月”这类原始语义。
+- normalized：归一化后的 TravelRequest 字段。
+- inferred：你对旅行场景的业务理解。
+- missing_decisions：还缺哪些会影响规划质量的决策，不要只写字段名。
+- assumptions：当前需要显式告知用户的假设。
+- risks：当前已经能看出的规划风险。
+- next_action：下一步动作，只允许 ask 或 ready。
+- ready_for_planning：是否已经适合进入初版规划。
+
+normalized 字段要求：
+- destination：目的地或候选目的地区域。
+- origin：出发城市。
+- date_range：时间范围，能规范化就规范化。
+- days：旅行天数，数字。
+- travelers：人数，数字或可理解的同行描述。
+- budget：尽量输出总预算数字；如果用户说人均预算，请结合人数估算总预算。
+- budget_scope：unknown / local_only / include_transport / include_transport_and_hotel。
+- pace：relaxed / balanced / compact，无法判断则 null。
+- themes：旅行主题数组。
+- constraints：真实限制条件数组。
+
+下一步追问规则：
+- 一次只问一个最关键、最自然的问题。
+- 优先问会改变方案分支的问题，例如父母/儿童体力、目的地范围、预算含义、旅行风格。
+- 不要像表单一样机械追问所有字段。
+- 如果已经能规划，就把 next_action.type 设为 ready，question 设为 null。
+- 如果用户带父母、老人、儿童或孕妇同行，必须优先确认体力、步行强度或特殊照顾需求。
+- 如果预算是“人均”，需要在 normalized.budget 中估算总预算，并在 inferred.budget_type 标记 per_person。
+- 如果目的地是“东南亚”“日本”“欧洲”这类大范围区域，通常应追问旅行风格或候选国家/城市。
+
+请严格参考 one-shot 的 JSON 结构。one-shot 只是格式示例，不要把示例内容当作当前用户需求。
+
+{one_shot}
+
+当前对话：
+{transcript}
+"""
+    return [
+        LLMMessage(role="system", content=system_prompt),
+        LLMMessage(role="user", content=user_prompt),
+    ]

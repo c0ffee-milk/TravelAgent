@@ -5,9 +5,9 @@
     python scripts/demo_clarification_chat.py
 
 这个 demo 只做三件事：
-1. 调用 DeepSeek 把用户自然语言抽取成 TravelRequest 草案。
-2. 调用 clarification.py 判断缺失字段并生成追问。
-3. 通过多轮问答逐步补齐需求，直到可以进入初版规划。
+1. 调用 DeepSeek 理解多轮旅行需求。
+2. 生成自然澄清状态和下一步追问。
+3. 通过多轮问答逐步补齐关键决策，直到可以进入初版规划。
 
 注意：
 - 本 demo 不生成完整行程。
@@ -32,19 +32,23 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 
-from travel_agent.clarification import clarify_request  # noqa: E402
+from travel_agent.clarification import (  # noqa: E402
+    NaturalClarificationResult,
+    apply_natural_ready_guard,
+    natural_clarification_from_dict,
+)
 from travel_agent.llm_provider import (  # noqa: E402
     DeepSeekChatClient,
     LLMConfig,
     LLMConfigurationError,
     LLMProviderError,
-    build_travel_request_extraction_messages,
+    build_natural_clarification_messages,
     parse_json_object,
 )
 from travel_agent.schemas import BudgetScope, TravelPace, TravelRequest  # noqa: E402
 
 
-MAX_ROUNDS = 6
+MAX_ROUNDS = 10
 
 
 def main() -> None:
@@ -72,26 +76,29 @@ def main() -> None:
     transcript = raw_query
     current_request: TravelRequest | None = None
     shown_assumptions: set[str] = set()
+    shown_risks: set[str] = set()
 
     for round_index in range(1, MAX_ROUNDS + 1):
         print()
         print(f"--- 第 {round_index} 轮需求分析 ---")
 
         try:
-            request = extract_travel_request(client, transcript, raw_query)
+            understanding = extract_natural_understanding(client, transcript)
         except LLMProviderError as exc:
             print(f"模型调用失败：{exc}")
             return
 
+        request = travel_request_from_dict(understanding.normalized, raw_query)
         request = merge_travel_request(current_request, request)
         current_request = request
+        understanding = apply_natural_ready_guard(understanding, request)
 
-        result = clarify_request(request, max_questions=1)
         print_request_snapshot(request)
+        print_understanding_snapshot(understanding)
 
         new_assumptions = [
             assumption
-            for assumption in result.assumptions
+            for assumption in understanding.assumptions
             if assumption not in shown_assumptions
         ]
         if new_assumptions:
@@ -100,19 +107,27 @@ def main() -> None:
                 print(f"- {assumption}")
                 shown_assumptions.add(assumption)
 
-        if result.ready_for_planning:
+        new_risks = [risk for risk in understanding.risks if risk not in shown_risks]
+        if new_risks:
+            print("当前风险：")
+            for risk in new_risks:
+                print(f"- {risk}")
+                shown_risks.add(risk)
+
+        if understanding.ready_for_planning or understanding.next_action.action_type == "ready":
             print()
             print("当前信息已经足够进入初版规划。")
             print("下一步课程会在这个结构化请求基础上接入地图、天气和行程生成。")
             return
+        else:
+            question = understanding.next_action.question
 
-        if not result.questions:
+        if not question:
             print()
-            print("当前还有缺失字段，但本轮没有生成新的追问。")
+            print("当前还有缺失决策，但模型没有生成新的追问。")
             print("你可以补充更多旅行信息后重新运行 demo。")
             return
 
-        question = result.questions[0]
         print()
         print(f"Agent：{question}")
         answer = input("你：").strip()
@@ -155,24 +170,22 @@ def load_local_env() -> None:
                 os.environ[key] = value
 
 
-def extract_travel_request(
+def extract_natural_understanding(
     client: DeepSeekChatClient,
     transcript: str,
-    original_query: str,
-) -> TravelRequest:
-    """用 LLM 从当前对话记录中抽取 TravelRequest。"""
+) -> NaturalClarificationResult:
+    """用 LLM 从当前对话记录中生成自然澄清状态。"""
 
     response = client.chat(
-        build_travel_request_extraction_messages(
+        build_natural_clarification_messages(
             transcript,
             current_date=date.today().isoformat(),
-            is_conversation=True,
         ),
         temperature=0,
         response_format={"type": "json_object"},
     )
     data = parse_json_object(response.content)
-    return travel_request_from_dict(data, raw_query=original_query)
+    return natural_clarification_from_dict(data)
 
 
 def merge_travel_request(
@@ -408,6 +421,22 @@ def print_request_snapshot(request: TravelRequest) -> None:
         if value in (None, [], ""):
             value = "未明确"
         print(f"- {label}: {value}")
+
+
+def print_understanding_snapshot(understanding: NaturalClarificationResult) -> None:
+    """打印 LLM 对当前旅行场景的业务理解。"""
+
+    if understanding.inferred:
+        print("当前业务理解：")
+        for key, value in understanding.inferred.items():
+            if value in (None, [], "", {}):
+                continue
+            print(f"- {key}: {value}")
+
+    if understanding.missing_decisions:
+        print("待确认决策：")
+        for decision in understanding.missing_decisions:
+            print(f"- {decision}")
 
 
 def should_exit(text: str) -> bool:
