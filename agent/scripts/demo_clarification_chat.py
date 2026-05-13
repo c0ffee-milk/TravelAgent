@@ -11,18 +11,17 @@
 
 注意：
 - 本 demo 不生成完整行程。
-- 本 demo 不调用地图、天气、酒店或航班 API。
-- 本 demo 只是把 Lesson 00-02 串起来，方便你先看到一个可对话闭环。
+- 本 demo 在信息足够时可选调用高德地图做事实预览。
+- 本 demo 不调用天气、酒店或航班 API。
+- 本 demo 只是把 Lesson 00-03 串起来，方便你先看到一个可对话闭环。
 """
 
 from __future__ import annotations
 
 import os
-import re
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +44,12 @@ from travel_agent.llm_provider import (  # noqa: E402
     build_natural_clarification_messages,
     parse_json_object,
 )
-from travel_agent.schemas import BudgetScope, TravelPace, TravelRequest  # noqa: E402
+from travel_agent.map_tools import build_map_preview_lines  # noqa: E402
+from travel_agent.request_normalization import (  # noqa: E402
+    merge_travel_request,
+    travel_request_from_dict,
+)
+from travel_agent.schemas import BudgetScope, TravelRequest  # noqa: E402
 
 
 MAX_ROUNDS = 10
@@ -117,6 +121,7 @@ def main() -> None:
         if understanding.ready_for_planning or understanding.next_action.action_type == "ready":
             print()
             print("当前信息已经足够进入初版规划。")
+            print_map_preview(request)
             print("下一步课程会在这个结构化请求基础上接入地图、天气和行程生成。")
             return
         else:
@@ -188,211 +193,15 @@ def extract_natural_understanding(
     return natural_clarification_from_dict(data)
 
 
-def merge_travel_request(
-    previous: TravelRequest | None,
-    current: TravelRequest,
-) -> TravelRequest:
-    """合并上一轮已确认字段，避免 LLM 在下一轮抽取时把旧信息丢掉。"""
+def print_map_preview(request: TravelRequest) -> None:
+    """在进入规划前打印一次轻量地图事实预览。"""
 
-    if previous is None:
-        return current
-
-    return TravelRequest(
-        raw_query=previous.raw_query,
-        destination=current.destination or previous.destination,
-        origin=current.origin or previous.origin,
-        date_range=choose_better_date_range(previous.date_range, current.date_range),
-        days=current.days if current.days is not None else previous.days,
-        travelers=current.travelers or previous.travelers,
-        budget=current.budget if current.budget is not None else previous.budget,
-        budget_scope=(
-            current.budget_scope
-            if current.budget_scope != BudgetScope.UNKNOWN
-            else previous.budget_scope
-        ),
-        pace=current.pace or previous.pace,
-        themes=current.themes or previous.themes,
-        constraints=current.constraints or previous.constraints,
-        assumptions=previous.assumptions,
-    )
-
-
-def choose_better_date_range(previous: str | None, current: str | None) -> str | None:
-    """合并日期字段时，优先保留更规范的日期表达。"""
-
-    if previous is None:
-        return current
-    if current is None:
-        return previous
-
-    previous_score = score_date_range(previous)
-    current_score = score_date_range(current)
-    if current_score >= previous_score:
-        return current
-    return previous
-
-
-def score_date_range(value: str) -> int:
-    """给日期表达打分，分数越高表示越规范。"""
-
-    score = 0
-    if re.search(r"\d{4}", value):
-        score += 4
-    if "年" in value:
-        score += 2
-    if "月" in value:
-        score += 2
-    if re.search(r"\d{1,2}[/-]\d{1,2}", value):
-        score += 2
-    if any(relative_word in value for relative_word in ["下个月", "明年", "五一"]):
-        score += 1
-    return score
-
-
-def travel_request_from_dict(data: dict[str, Any], raw_query: str) -> TravelRequest:
-    """把模型 JSON 转成项目内部 TravelRequest。
-
-    LLM 输出不可信，所有字段都需要做轻量清洗。
-    """
-
-    return TravelRequest(
-        raw_query=raw_query,
-        destination=as_optional_string(data.get("destination")),
-        origin=as_optional_string(data.get("origin")),
-        date_range=as_optional_string(data.get("date_range")),
-        days=as_optional_int(data.get("days")),
-        travelers=as_optional_string(data.get("travelers")),
-        budget=as_optional_int(data.get("budget")),
-        budget_scope=normalize_budget_scope(data.get("budget_scope")),
-        pace=normalize_travel_pace(data.get("pace")),
-        themes=as_string_list(data.get("themes")),
-        constraints=as_string_list(data.get("constraints")),
-    )
-
-
-def normalize_travel_pace(value: Any) -> TravelPace | None:
-    """把模型输出的旅行节奏归一化为枚举。"""
-
-    text = as_optional_string(value)
-    if text is None:
-        return None
-
-    lowered = text.lower()
-    if lowered in {"relaxed", "轻松", "慢", "慢节奏", "休闲"}:
-        return TravelPace.RELAXED
-    if lowered in {"balanced", "适中", "中等", "正常"}:
-        return TravelPace.BALANCED
-    if lowered in {"compact", "紧凑", "赶", "多打卡"}:
-        return TravelPace.COMPACT
-    return None
-
-
-def normalize_budget_scope(value: Any) -> BudgetScope:
-    """把预算覆盖范围归一化为枚举。"""
-
-    text = as_optional_string(value)
-    if text is None:
-        return BudgetScope.UNKNOWN
-
-    lowered = text.lower()
-    if lowered in {"local_only", "当地", "不含大交通", "只含当地"}:
-        return BudgetScope.LOCAL_ONLY
-    if lowered in {"include_transport", "含交通", "包含往返交通", "包含大交通"}:
-        return BudgetScope.INCLUDE_TRANSPORT
-    if lowered in {
-        "include_transport_and_hotel",
-        "含交通和酒店",
-        "包含往返交通和酒店",
-        "全包",
-    }:
-        return BudgetScope.INCLUDE_TRANSPORT_AND_HOTEL
-    return BudgetScope.UNKNOWN
-
-
-def as_optional_string(value: Any) -> str | None:
-    """把任意值转成非空字符串。"""
-
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"null", "none", "unknown", "未说明"}:
-        return None
-    return text
-
-
-def as_optional_int(value: Any) -> int | None:
-    """把模型输出转成整数。
-
-    当前 TravelRequest 还没有预算区间字段。遇到“5000 到 8000”这种范围时，
-    demo 先取上限作为保守预算值，避免继续卡在预算追问上。
-    """
-
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-
-    text = str(value).strip()
-    if not text:
-        return None
-
-    normalized_text = text.replace("，", ",").replace("－", "-").replace("—", "-")
-    number_groups = re.findall(r"\d+(?:\.\d+)?", normalized_text)
-    if not number_groups:
-        return None
-
-    number = max(float(number_group) for number_group in number_groups)
-    if "万" in normalized_text:
-        number *= 10000
-    elif "千" in normalized_text or "k" in normalized_text.lower():
-        number *= 1000
-
-    return int(number)
-
-
-def as_string_list(value: Any) -> list[str]:
-    """把模型输出转成字符串列表。"""
-
-    if value is None:
-        return []
-
-    if isinstance(value, list):
-        cleaned_items = []
-        for item in value:
-            text = clean_optional_list_item(item)
-            if text is not None:
-                cleaned_items.append(text)
-        return cleaned_items
-
-    text = clean_optional_list_item(value)
-    return [text] if text is not None else []
-
-
-def clean_optional_list_item(value: Any) -> str | None:
-    """清洗模型输出列表中的单个元素。"""
-
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, dict):
-        return None
-    if isinstance(value, list):
-        return None
-
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.lower() in {"null", "none", "unknown", "n/a"}:
-        return None
-    if text in {"{}", "[]", "未说明", "无", "没有"}:
-        return None
-
-    return text
+    for line in build_map_preview_lines(
+        destination=request.destination,
+        origin=request.origin,
+        themes=request.themes,
+    ):
+        print(line)
 
 
 def print_request_snapshot(request: TravelRequest) -> None:
@@ -402,6 +211,7 @@ def print_request_snapshot(request: TravelRequest) -> None:
         "目的地": request.destination,
         "出发地": request.origin,
         "出行时间": request.date_range,
+        "时间精度": request.time_precision.value,
         "天数": request.days,
         "出行人": request.travelers,
         "预算": request.budget,
@@ -410,6 +220,8 @@ def print_request_snapshot(request: TravelRequest) -> None:
             if request.budget_scope != BudgetScope.UNKNOWN
             else None
         ),
+        "大交通偏好": request.long_distance_transport_preference,
+        "当地交通偏好": request.local_transport_preference,
         "节奏": request.pace.value if request.pace else None,
         "主题": request.themes,
         "约束": request.constraints,
@@ -428,7 +240,7 @@ def print_understanding_snapshot(understanding: NaturalClarificationResult) -> N
     if understanding.inferred:
         print("当前业务理解：")
         for key, value in understanding.inferred.items():
-            if value in (None, [], "", {}):
+            if key == "time_precision" or value in (None, [], "", {}):
                 continue
             print(f"- {key}: {value}")
 

@@ -106,11 +106,32 @@ def build_natural_ready_guard_question(
     if needs_companion_constraint_check(request, result):
         return "同行人里有父母、老人或孩子时，我需要确认一下体力和照顾需求。有没有步行强度、饮食、住宿或交通方面需要特别注意的地方？"
 
+    if needs_transport_preference_check(request):
+        return build_transport_preference_question(request)
+
     if request.pace is None and not request.themes:
         destination = request.destination or "这次旅行"
         return f"确认一下旅行风格：你这次去{destination}更偏经典景点打卡、城市漫游美食，还是轻松休闲为主？"
 
     return None
+
+
+def needs_transport_preference_check(request: TravelRequest) -> bool:
+    if not request.origin or not request.destination:
+        return False
+    return (
+        request.long_distance_transport_preference is None
+        or request.local_transport_preference is None
+    )
+
+
+def build_transport_preference_question(request: TravelRequest) -> str:
+    origin = request.origin or "出发地"
+    destination = request.destination or "目的地"
+    return (
+        f"进入规划前我还想确认一下交通偏好：{origin}到{destination}这类大交通你更偏高铁、飞机、自驾，还是都可以？"
+        f"到{destination}后当地交通更偏公共交通、打车、步行为主，还是无所谓？"
+    )
 
 
 def needs_companion_constraint_check(

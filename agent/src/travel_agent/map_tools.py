@@ -15,10 +15,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import error, parse, request
+
+from .llm_provider import (
+    DeepSeekChatClient,
+    LLMConfig,
+    LLMConfigurationError,
+    LLMProviderError,
+    build_theme_poi_query_messages,
+    parse_json_object,
+)
 
 DEFAULT_AMAP_BASE_URL = "https://restapi.amap.com"
 
@@ -42,12 +53,14 @@ class AmapConfig:
     api_key: str
     base_url: str = DEFAULT_AMAP_BASE_URL
     timeout_seconds: float = 60
+    max_retries: int = 2
 
     @classmethod
     def from_env(cls) -> "AmapConfig":
         api_key = os.getenv("AMAP_API_KEY", "").strip()
         base_url = os.getenv("AMAP_BASE_URL", DEFAULT_AMAP_BASE_URL).strip()
         timeout_seconds = parse_float_env("AMAP_TIMEOUT_SECONDS", default=60.0)
+        max_retries = parse_int_env("AMAP_MAX_RETRIES", default=2)
 
         if not api_key:
             raise AmapConfigurationError("缺少环境变量 AMAP_API_KEY。")
@@ -55,11 +68,14 @@ class AmapConfig:
             raise AmapConfigurationError("环境变量 AMAP_BASE_URL 不能为空。")
         if timeout_seconds <= 0:
             raise AmapConfigurationError("环境变量 AMAP_TIMEOUT_SECONDS 必须大于 0。")
+        if max_retries < 0:
+            raise AmapConfigurationError("环境变量 AMAP_MAX_RETRIES 不能小于 0。")
 
         return cls(
             api_key=api_key,
             base_url=base_url.rstrip("/"),
             timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
 
 @dataclass(frozen=True)
@@ -253,15 +269,7 @@ class AmapClient:
         url = self._build_url(path, params)
         http_request = request.Request(url, method="GET")
 
-        try:
-            with self._urlopen(http_request, timeout=self.config.timeout_seconds) as response:
-                body = response.read().decode("utf-8")
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise AmapToolError(f"高德 HTTP 请求失败：{exc.code} {detail}") from exc
-        except (error.URLError, TimeoutError, socket.timeout) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise AmapToolError(f"高德网络请求失败：{reason}") from exc
+        body = self._send_with_retries(http_request)
 
         try:
             data = json.loads(body)
@@ -278,6 +286,25 @@ class AmapClient:
             raise AmapToolError(f"高德 API 返回失败：status={status}, info={info}, infocode={infocode}")
 
         return data
+
+    def _send_with_retries(self, http_request: request.Request) -> str:
+        last_error: BaseException | None = None
+
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                with self._urlopen(http_request, timeout=self.config.timeout_seconds) as response:
+                    return response.read().decode("utf-8")
+            except error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise AmapToolError(f"高德 HTTP 请求失败：{exc.code} {detail}") from exc
+            except (error.URLError, TimeoutError, socket.timeout) as exc:
+                last_error = exc
+                if attempt >= self.config.max_retries:
+                    reason = getattr(exc, "reason", exc)
+                    raise AmapToolError(f"高德网络请求失败：{reason}") from exc
+                time.sleep(min(2**attempt, 4))
+
+        raise AmapToolError(f"高德网络请求失败：{last_error}") from last_error
 
     def _build_url(self, path: str, params: dict[str, Any]) -> str:
         query = {
@@ -375,6 +402,338 @@ def build_route_summary(steps: list[str]) -> str | None:
         return None
     return " -> ".join(steps[:3])
 
+
+
+def build_map_preview_lines(
+    destination: str | None,
+    origin: str | None = None,
+    themes: list[str] | None = None,
+) -> list[str]:
+    if not destination:
+        return ["地图预览：当前还没有明确目的地，跳过地图查询。"]
+
+    try:
+        amap_client = AmapClient(AmapConfig.from_env())
+    except AmapConfigurationError:
+        return ["地图预览：未检测到 AMAP_API_KEY，跳过地图查询。"]
+
+    try:
+        destination_geocode = amap_client.geocode(destination)
+    except AmapToolError as exc:
+        return [f"地图预览失败：{exc}"]
+
+    lines = [
+        "地图预览：",
+        f"- 目的地解析：{destination_geocode.formatted_address}",
+        f"- 坐标：{destination_geocode.location.longitude},{destination_geocode.location.latitude}",
+    ]
+    if destination_geocode.city:
+        lines.append(f"- 城市：{destination_geocode.city}")
+    if destination_geocode.district:
+        lines.append(f"- 区县：{destination_geocode.district}")
+
+    if origin:
+        lines.extend(build_route_preview_lines(amap_client, origin, destination_geocode))
+
+    if themes:
+        lines.extend(
+            build_theme_poi_preview_lines(
+                amap_client,
+                themes,
+                city=destination_geocode.city or destination,
+                destination_scope=destination,
+            )
+        )
+
+    return lines
+
+
+def build_route_preview_lines(
+    amap_client: AmapClient,
+    origin: str,
+    destination_geocode: GeocodeResult,
+) -> list[str]:
+    try:
+        origin_geocode = amap_client.geocode(origin)
+    except AmapToolError as exc:
+        return [f"- 出发地解析失败：{exc}"]
+
+    lines = [f"- 出发地解析：{origin_geocode.formatted_address}"]
+    origin_region = origin_geocode.city or origin_geocode.province
+    destination_region = destination_geocode.city or destination_geocode.province
+
+    try:
+        if origin_region and destination_region and origin_region == destination_region:
+            route = amap_client.walking_route(
+                origin_geocode.location,
+                destination_geocode.location,
+            )
+            route_mode_label = "步行"
+        else:
+            route = amap_client.driving_route(
+                origin_geocode.location,
+                destination_geocode.location,
+            )
+            route_mode_label = "驾车"
+    except AmapToolError as exc:
+        lines.append(f"- 路线预览失败：{exc}")
+        return lines
+
+    lines.append(
+        f"- 路线预览（{route_mode_label}）：约 {format_distance(route.distance_meters)} / {format_duration(route.duration_seconds)}"
+    )
+    if route.summary:
+        lines.append(f"  - 摘要：{route.summary}")
+    return lines
+
+
+def build_theme_poi_preview_lines(
+    amap_client: AmapClient,
+    themes: list[str],
+    city: str,
+    destination_scope: str | None = None,
+) -> list[str]:
+    poi_queries = build_poi_preview_queries_with_llm(
+        city=city,
+        themes=themes,
+        destination_scope=destination_scope,
+    )
+    if not poi_queries:
+        return []
+
+    try:
+        candidates = collect_theme_pois(amap_client, city, poi_queries)
+    except AmapToolError as exc:
+        return [f"- POI 预览失败：{exc}"]
+
+    selected = select_distinct_preview_pois(candidates, limit=3)
+    if not selected:
+        return ["- 当前主题较抽象，暂未找到合适的 POI 预览结果。"]
+
+    lines = ["- 主题 POI 预览："]
+    for theme_label, keyword, poi in selected:
+        parts = [poi.name]
+        if poi.address:
+            parts.append(poi.address)
+        if poi.poi_type:
+            parts.append(f"类型：{poi.poi_type}")
+        lines.append(f"  - {'；'.join(parts)}（{theme_label}，按“{keyword}”检索）")
+    return lines
+
+
+def collect_theme_pois(
+    amap_client: AmapClient,
+    city: str,
+    poi_queries: list[tuple[str, str]],
+) -> list[tuple[str, str, AmapPOI]]:
+    candidates: list[tuple[str, str, AmapPOI]] = []
+    last_error: AmapToolError | None = None
+
+    for theme_label, keyword in poi_queries[:6]:
+        try:
+            pois = amap_client.search_poi(keyword=keyword, city=city, offset=8)
+        except AmapToolError as exc:
+            last_error = exc
+            continue
+
+        for poi in pois:
+            if is_transport_or_subpoi(poi):
+                continue
+            candidates.append((theme_label, keyword, poi))
+
+    if not candidates and last_error is not None:
+        raise last_error
+    return candidates
+
+
+def select_distinct_preview_pois(
+    candidates: list[tuple[str, str, AmapPOI]],
+    limit: int = 3,
+) -> list[tuple[str, str, AmapPOI]]:
+    selected_by_name: dict[str, tuple[int, tuple[str, str, AmapPOI]]] = {}
+
+    for candidate in candidates:
+        _, _, poi = candidate
+        canonical_name = canonicalize_poi_name(poi.name)
+        if not canonical_name:
+            continue
+
+        score = poi_place_score(poi)
+        current = selected_by_name.get(canonical_name)
+        if current is None or score > current[0]:
+            selected_by_name[canonical_name] = (score, candidate)
+
+    ranked = sorted(
+        selected_by_name.values(),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    return [candidate for _, candidate in ranked[:limit]]
+
+
+def canonicalize_poi_name(name: str) -> str:
+    text = name.strip()
+    text = re.sub(r"[（(].*?[）)]", "", text)
+    for suffix in ["景区", "风景区", "地铁站", "公交站", "步行街", "停车场", "游客中心"]:
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+    return text.strip()
+
+
+def is_transport_or_subpoi(poi: AmapPOI) -> bool:
+    text = " ".join(
+        value
+        for value in [poi.name, poi.poi_type, poi.address]
+        if value
+    )
+    blocked_keywords = [
+        "地铁站",
+        "公交站",
+        "停车场",
+        "停车区",
+        "出入口",
+        "入口",
+        "出口",
+        "大门",
+        "道路名",
+        "道路",
+        "交通设施服务",
+    ]
+    return any(keyword in text for keyword in blocked_keywords)
+
+
+def poi_place_score(poi: AmapPOI) -> int:
+    text = " ".join(
+        value
+        for value in [poi.name, poi.poi_type, poi.address]
+        if value
+    )
+    score = 0
+    preferred_keywords = [
+        "风景名胜",
+        "旅游景点",
+        "名胜古迹",
+        "博物馆",
+        "特色商业街",
+        "步行街",
+        "公园",
+        "景区",
+    ]
+    for keyword in preferred_keywords:
+        if keyword in text:
+            score += 3
+    if poi.address:
+        score += 1
+    if poi.location:
+        score += 1
+    return score
+
+
+def build_poi_preview_queries_with_llm(
+    city: str,
+    themes: list[str],
+    destination_scope: str | None = None,
+) -> list[tuple[str, str]]:
+    try:
+        llm_client = DeepSeekChatClient(LLMConfig.from_env())
+    except LLMConfigurationError:
+        return build_poi_preview_queries(themes)
+
+    try:
+        response = llm_client.chat(
+            build_theme_poi_query_messages(
+                destination=city,
+                themes=themes,
+                destination_scope=destination_scope,
+            ),
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        data = parse_json_object(response.content)
+    except LLMProviderError:
+        return build_poi_preview_queries(themes)
+
+    queries_data = data.get("queries")
+    if not isinstance(queries_data, list):
+        return build_poi_preview_queries(themes)
+
+    queries: list[tuple[str, str]] = []
+    seen_queries: set[str] = set()
+    for item in queries_data:
+        if not isinstance(item, dict):
+            continue
+        theme = as_optional_string(item.get("theme"))
+        query = as_optional_string(item.get("query"))
+        if not theme or not query or query in seen_queries:
+            continue
+        seen_queries.add(query)
+        queries.append((theme, query))
+
+    return queries or build_poi_preview_queries(themes)
+
+
+def build_poi_preview_queries(themes: list[str]) -> list[tuple[str, str]]:
+    theme_query_map = {
+        "城市漫游": ["历史街区", "步行街", "胡同"],
+        "city walk": ["历史街区", "步行街", "胡同"],
+        "美食": ["美食街", "小吃街", "餐饮"],
+        "小吃": ["小吃街", "小吃"],
+        "夜市": ["夜市", "小吃街"],
+        "海岛": ["海滩", "海岛景区"],
+        "购物": ["商场", "步行街"],
+        "逛街": ["步行街", "商圈"],
+        "博物馆": ["博物馆"],
+        "古迹": ["古迹", "名胜古迹"],
+        "历史": ["历史街区", "古迹"],
+    }
+    generic_themes = {"轻松", "休闲", "放松", "旅行", "游玩", "度假"}
+
+    queries: list[tuple[str, str]] = []
+    seen_queries: set[str] = set()
+
+    for theme in themes:
+        normalized_theme = theme.strip()
+        if not normalized_theme:
+            continue
+
+        candidate_queries = theme_query_map.get(normalized_theme)
+        if candidate_queries is None:
+            candidate_queries = theme_query_map.get(normalized_theme.lower())
+
+        if candidate_queries is None:
+            if normalized_theme in generic_themes:
+                continue
+            candidate_queries = [normalized_theme]
+
+        for query in candidate_queries:
+            if query in seen_queries:
+                continue
+            seen_queries.add(query)
+            queries.append((normalized_theme, query))
+
+    return queries
+
+
+def format_distance(distance_meters: int | None) -> str:
+    if distance_meters is None:
+        return "未知距离"
+    if distance_meters >= 1000:
+        return f"{distance_meters / 1000:.1f}公里"
+    return f"{distance_meters}米"
+
+
+def format_duration(duration_seconds: int | None) -> str:
+    if duration_seconds is None:
+        return "未知时长"
+    total_minutes = max(1, round(duration_seconds / 60))
+    hours, minutes = divmod(total_minutes, 60)
+    if hours == 0:
+        return f"{minutes}分钟"
+    if minutes == 0:
+        return f"{hours}小时"
+    return f"{hours}小时{minutes}分钟"
+
+
 def parse_float_env(name: str, default: float) -> float:
     """读取 float 类型环境变量。"""
 
@@ -387,6 +746,18 @@ def parse_float_env(name: str, default: float) -> float:
         raise AmapConfigurationError(f"环境变量 {name} 必须是数字。") from exc
 
 
+def parse_int_env(name: str, default: int) -> int:
+    """读取 int 类型环境变量。"""
+
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise AmapConfigurationError(f"环境变量 {name} 必须是整数。") from exc
+
+
 def as_string(value: Any) -> str:
     """把值转换为必填字符串。"""
 
@@ -394,6 +765,7 @@ def as_string(value: Any) -> str:
     if text is None:
         raise AmapToolError("高德响应缺少必填字符串字段。")
     return text
+
 
 def as_optional_string(value: Any) -> str | None:
     """把值转换为可选字符串。"""

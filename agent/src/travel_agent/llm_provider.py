@@ -384,6 +384,56 @@ Agent 追问：你希望行程节奏偏轻松、适中，还是紧凑多打卡�
     ]
 
 
+def build_theme_poi_query_messages(
+    destination: str,
+    themes: list[str],
+    destination_scope: str | None = None,
+) -> list[LLMMessage]:
+    """为目的地和抽象主题生成适合地图检索的 POI 查询词。"""
+
+    system_prompt = (
+        "你是旅游规划 Agent 的地图检索词规划模块。"
+        "你的任务是把抽象旅行主题转换成适合地图/POI 搜索的具体检索词。"
+        "你必须结合目的地的真实城市语境理解主题，不要输出泛泛而谈的形容词。"
+        "输出必须是严格 JSON 对象，不要 Markdown，不要解释，不要附加其他文本。"
+    )
+    user_prompt = f"""
+请根据目的地、用户确认的目的地范围和旅行主题，输出适合地图 POI 检索的具体查询词。
+
+目的地：{destination}
+用户确认的目的地范围：{destination_scope or destination}
+主题：{themes}
+
+输出字段：
+- queries: 数组，每个元素是对象，包含：
+  - theme: 原始主题
+  - query: 适合地图检索的具体查询词
+  - reason: 为什么这个词适合在该目的地搜索
+
+要求：
+- 每个主题最多输出 2 个查询词。
+- 查询词要尽量具体，可直接用于城市 POI 搜索。
+- 对“城市漫游”这类抽象主题，应转成该城市更像地点/片区/体验载体的词。
+- 如果用户确认的目的地范围包含“周边”“附近”“市区”等限定，查询词必须落在这个范围内。
+- 不要把区域级目的地扩散到距离很远的其他城市、地区或极限路线。
+- 不要输出酒店、机票、预算、攻略类词。
+- 如果主题太泛，优先输出该城市中更容易检索到实体地点的词。
+
+示例输出：
+{{
+  "queries": [
+    {{"theme": "城市漫游", "query": "胡同", "reason": "北京 city walk 常落在胡同与历史街区"}},
+    {{"theme": "城市漫游", "query": "什刹海", "reason": "北京城市漫游常见步行片区"}},
+    {{"theme": "美食", "query": "美食街", "reason": "便于搜到聚合餐饮片区"}}
+  ]
+}}
+"""
+    return [
+        LLMMessage(role="system", content=system_prompt),
+        LLMMessage(role="user", content=user_prompt),
+    ]
+
+
 def build_natural_clarification_messages(
     transcript: str,
     current_date: str | None = None,
@@ -437,6 +487,8 @@ Agent：预算大概是多少？
     "travelers": 3,
     "budget": 15000,
     "budget_scope": "include_transport_and_hotel",
+    "long_distance_transport_preference": null,
+    "local_transport_preference": null,
     "pace": null,
     "themes": [],
     "constraints": []
@@ -481,6 +533,8 @@ normalized 字段要求：
 - travelers：人数，数字或可理解的同行描述。
 - budget：尽量输出总预算数字；如果用户说人均预算，请结合人数估算总预算。
 - budget_scope：unknown / local_only / include_transport / include_transport_and_hotel。
+- long_distance_transport_preference：大交通偏好，例如高铁、飞机、自驾、都可以；无法判断则 null。
+- local_transport_preference：目的地当地交通偏好，例如公共交通、打车、步行、自驾、都可以；无法判断则 null。
 - pace：relaxed / balanced / compact，无法判断则 null。
 - themes：旅行主题数组。
 - constraints：真实限制条件数组。
@@ -493,6 +547,8 @@ normalized 字段要求：
 - 如果用户带父母、老人、儿童或孕妇同行，必须优先确认体力、步行强度或特殊照顾需求。
 - 如果预算是“人均”，需要在 normalized.budget 中估算总预算，并在 inferred.budget_type 标记 per_person。
 - 如果目的地是“东南亚”“日本”“欧洲”这类大范围区域，通常应追问旅行风格或候选国家/城市。
+- inferred.time_precision 只作为模型理解参考，不作为权威状态；时间精度由 Agent 根据 normalized.date_range 归一化。
+- 如果核心旅行信息已足够，但还没有确认交通偏好，应询问一次大交通和当地交通偏好。
 
 请严格参考 one-shot 的 JSON 结构。one-shot 只是格式示例，不要把示例内容当作当前用户需求。
 

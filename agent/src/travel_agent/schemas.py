@@ -9,6 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+class TimePrecision(str, Enum):
+    """出行时间精度。"""
+
+    UNKNOWN = "unknown"
+    YEAR = "year"
+    MONTH = "month"
+    DAY = "day"
+    RANGE = "range"
+
+
 class TravelPace(str, Enum):
     """旅行节奏。"""
 
@@ -36,10 +46,13 @@ class TravelRequest:
     destination: str | None = None
     origin: str | None = None
     date_range: str | None = None
+    time_precision: TimePrecision = TimePrecision.UNKNOWN
     days: int | None = None
     travelers: str | None = None
     budget: int | None = None
     budget_scope: BudgetScope = BudgetScope.UNKNOWN
+    long_distance_transport_preference: str | None = None
+    local_transport_preference: str | None = None
     pace: TravelPace | None = None
     themes: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
