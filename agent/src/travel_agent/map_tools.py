@@ -30,6 +30,7 @@ from .llm_provider import (
     build_theme_poi_query_messages,
     parse_json_object,
 )
+from .schemas import TravelRequest
 
 DEFAULT_AMAP_BASE_URL = "https://restapi.amap.com"
 
@@ -408,6 +409,8 @@ def build_map_preview_lines(
     destination: str | None,
     origin: str | None = None,
     themes: list[str] | None = None,
+    long_distance_transport_preference: str | None = None,
+    local_transport_preference: str | None = None,
 ) -> list[str]:
     if not destination:
         return ["地图预览：当前还没有明确目的地，跳过地图查询。"]
@@ -433,7 +436,15 @@ def build_map_preview_lines(
         lines.append(f"- 区县：{destination_geocode.district}")
 
     if origin:
-        lines.extend(build_route_preview_lines(amap_client, origin, destination_geocode))
+        lines.extend(
+            build_route_preview_lines(
+                amap_client,
+                origin,
+                destination_geocode,
+                long_distance_transport_preference=long_distance_transport_preference,
+                local_transport_preference=local_transport_preference,
+            )
+        )
 
     if themes:
         lines.extend(
@@ -448,10 +459,28 @@ def build_map_preview_lines(
     return lines
 
 
+def build_map_preview_lines_for_request(request: TravelRequest) -> list[str]:
+    """根据完整旅行请求生成地图事实预览。
+
+    这是 Agent 层优先使用的入口。它把 TravelRequest 中的交通偏好传给地图工具，
+    避免用户已经选择飞机/高铁时，地图预览仍误打跨城驾车路线。
+    """
+
+    return build_map_preview_lines(
+        destination=request.destination,
+        origin=request.origin,
+        themes=request.themes,
+        long_distance_transport_preference=request.long_distance_transport_preference,
+        local_transport_preference=request.local_transport_preference,
+    )
+
+
 def build_route_preview_lines(
     amap_client: AmapClient,
     origin: str,
     destination_geocode: GeocodeResult,
+    long_distance_transport_preference: str | None = None,
+    local_transport_preference: str | None = None,
 ) -> list[str]:
     try:
         origin_geocode = amap_client.geocode(origin)
@@ -461,6 +490,19 @@ def build_route_preview_lines(
     lines = [f"- 出发地解析：{origin_geocode.formatted_address}"]
     origin_region = origin_geocode.city or origin_geocode.province
     destination_region = destination_geocode.city or destination_geocode.province
+
+    if should_skip_cross_region_driving_route(
+        origin_region=origin_region,
+        destination_region=destination_region,
+        long_distance_transport_preference=long_distance_transport_preference,
+    ):
+        preference = long_distance_transport_preference or "非自驾大交通"
+        lines.append(
+            f"- 大交通偏好：{preference}；地图工具暂不估算跨城驾车路线。"
+        )
+        if local_transport_preference:
+            lines.append(f"- 当地交通偏好：{local_transport_preference}")
+        return lines
 
     try:
         if origin_region and destination_region and origin_region == destination_region:
@@ -485,6 +527,49 @@ def build_route_preview_lines(
     if route.summary:
         lines.append(f"  - 摘要：{route.summary}")
     return lines
+
+
+def should_skip_cross_region_driving_route(
+    origin_region: str | None,
+    destination_region: str | None,
+    long_distance_transport_preference: str | None,
+) -> bool:
+    """判断是否应该跳过跨区域驾车路线。
+
+    高德驾车路线适合自驾场景；如果用户明确说大交通是飞机、高铁或火车，
+    跨城驾车距离会误导后续规划，因此只保留地点解析和交通偏好说明。
+    """
+
+    if not origin_region or not destination_region:
+        return False
+    if origin_region == destination_region:
+        return False
+
+    preference = normalize_transport_preference(long_distance_transport_preference)
+    if preference is None:
+        return False
+    return preference not in {"自驾", "驾车"}
+
+
+def normalize_transport_preference(value: str | None) -> str | None:
+    """归一化交通偏好关键词。"""
+
+    if value is None:
+        return None
+
+    text = value.strip().lower()
+    if not text:
+        return None
+
+    if any(keyword in text for keyword in ["飞机", "航班", "机票", "flight"]):
+        return "飞机"
+    if any(keyword in text for keyword in ["高铁", "动车", "火车", "铁路", "train"]):
+        return "高铁"
+    if any(keyword in text for keyword in ["自驾", "开车", "租车", "驾车", "drive"]):
+        return "自驾"
+    if any(keyword in text for keyword in ["都可以", "无所谓", "不限", "flexible"]):
+        return "都可以"
+    return value.strip()
 
 
 def build_theme_poi_preview_lines(

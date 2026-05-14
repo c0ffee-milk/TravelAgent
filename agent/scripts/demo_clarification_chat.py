@@ -44,7 +44,7 @@ from travel_agent.llm_provider import (  # noqa: E402
     build_natural_clarification_messages,
     parse_json_object,
 )
-from travel_agent.map_tools import build_map_preview_lines  # noqa: E402
+from travel_agent.map_tools import build_map_preview_lines_for_request  # noqa: E402
 from travel_agent.request_normalization import (  # noqa: E402
     merge_travel_request,
     travel_request_from_dict,
@@ -196,11 +196,7 @@ def extract_natural_understanding(
 def print_map_preview(request: TravelRequest) -> None:
     """在进入规划前打印一次轻量地图事实预览。"""
 
-    for line in build_map_preview_lines(
-        destination=request.destination,
-        origin=request.origin,
-        themes=request.themes,
-    ):
+    for line in build_map_preview_lines_for_request(request):
         print(line)
 
 
