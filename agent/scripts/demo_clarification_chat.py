@@ -50,6 +50,7 @@ from travel_agent.request_normalization import (  # noqa: E402
     travel_request_from_dict,
 )
 from travel_agent.schemas import BudgetScope, TravelRequest  # noqa: E402
+from travel_agent.weather_tools import build_weather_preview_lines_for_request  # noqa: E402
 
 
 MAX_ROUNDS = 10
@@ -122,6 +123,7 @@ def main() -> None:
             print()
             print("当前信息已经足够进入初版规划。")
             print_map_preview(request)
+            print_weather_preview(request)
             print("下一步课程会在这个结构化请求基础上接入地图、天气和行程生成。")
             return
         else:
@@ -197,6 +199,13 @@ def print_map_preview(request: TravelRequest) -> None:
     """在进入规划前打印一次轻量地图事实预览。"""
 
     for line in build_map_preview_lines_for_request(request):
+        print(line)
+
+
+def print_weather_preview(request: TravelRequest) -> None:
+    """在进入规划前打印一次轻量天气事实预览。"""
+
+    for line in build_weather_preview_lines_for_request(request):
         print(line)
 
 
