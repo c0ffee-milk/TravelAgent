@@ -113,6 +113,13 @@ def build_natural_ready_guard_question(
         destination = request.destination or "这次旅行"
         return f"确认一下旅行风格：你这次去{destination}更偏经典景点打卡、城市漫游美食，还是轻松休闲为主？"
 
+    if not request.themes:
+        destination = request.destination or "目的地"
+        return (
+            f"还差一个会影响路线取舍的信息：你们去{destination}更想看历史古迹、城市地标、"
+            "拍照打卡、美食街区，还是可以默认按经典景点打卡来规划？"
+        )
+
     return None
 
 

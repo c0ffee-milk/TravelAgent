@@ -176,6 +176,17 @@ def derive_time_precision(
     if not text:
         return TimePrecision.UNKNOWN
 
+    date_like_matches = re.findall(
+        r"\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2})?",
+        text,
+    )
+    has_range = (
+        any(marker in text for marker in ["至", "到", "—", "~", "～", "之间"])
+        or len(date_like_matches) >= 2
+    )
+    if has_range:
+        return TimePrecision.RANGE
+
     has_day = bool(
         re.search(r"\d{4}年\d{1,2}月\d{1,2}(?:日|号)?", text)
         or re.search(r"\d{1,2}[/-]\d{1,2}", text)
@@ -183,8 +194,18 @@ def derive_time_precision(
     if has_day:
         return TimePrecision.DAY
 
-    has_range = any(marker in text for marker in ["至", "到", "-", "—", "~", "～", "之间"])
-    if has_range:
+    relative_range_words = [
+        "本周",
+        "这周",
+        "下周",
+        "周末",
+        "这个周末",
+        "下个周末",
+        "五一期间",
+        "国庆期间",
+        "春节期间",
+    ]
+    if any(word in text for word in relative_range_words):
         return TimePrecision.RANGE
 
     if re.search(r"\d{4}年\d{1,2}月", text):

@@ -19,7 +19,7 @@ import socket
 import time
 import gzip
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Protocol
 from urllib import error, parse, request
 
@@ -278,12 +278,14 @@ def build_weather_preview_lines_for_request(travel_request: TravelRequest) -> li
         destination=travel_request.destination,
         date_range=travel_request.date_range,
         trip_days=travel_request.days,
+        pace=travel_request.pace.value if travel_request.pace else None,
     )
 
 def build_weather_preview_lines(
     destination: str | None,
     date_range: str | None = None,
     trip_days: int | None = None,
+    pace: str | None = None,
 ) -> list[str]:
     """生成适合 CLI 展示的轻量天气预览。"""
 
@@ -301,17 +303,29 @@ def build_weather_preview_lines(
             "- 天气工具将在临近出行时查询实时预报；当前只记录目的地天气风险需要后续复查。",
         ]
 
+    travel_window = parse_travel_date_window(date_range)
+    forecast_days = choose_forecast_days_for_window(travel_window, trip_days)
+    if forecast_days is None:
+        return [
+            "天气预览：当前出行日期超出逐日天气预报窗口。",
+            "- 天气工具将在临近出行时查询实时预报；当前只记录目的地天气风险需要后续复查。",
+        ]
+
     try:
         client = QWeatherClient(config)
         location = client.lookup_city(destination, number=1)[0]
         forecast = client.daily_forecast(
             location,
-            days=choose_forecast_days(trip_days),
+            days=forecast_days,
         )
     except QWeatherToolError as exc:
         return [f"天气预览：查询天气时发生错误，跳过天气展示。错误详情：{exc}"]
-    
-    risks = analyze_weather_risks(forecast.daily)
+
+    display_daily = filter_forecast_by_travel_window(forecast.daily, travel_window)
+    if not display_daily:
+        display_daily = forecast.daily[: min(3, len(forecast.daily))]
+
+    risks = analyze_weather_risks(display_daily, pace=pace)
 
     lines = [
         "天气预览：",
@@ -319,8 +333,12 @@ def build_weather_preview_lines(
     ]
     if forecast.update_time:
         lines.append(f"- 预报更新时间：{forecast.update_time}")
+    if travel_window:
+        lines.append(
+            f"- 出行天气窗口：{travel_window[0].isoformat()} 至 {travel_window[1].isoformat()}"
+        )
 
-    for item in forecast.daily[: min(3, len(forecast.daily))]:
+    for item in display_daily[: min(4, len(display_daily))]:
         lines.append(f"- {format_daily_weather(item)}")
     
     if risks:
@@ -367,10 +385,14 @@ def parse_daily_weather(item: dict[str, Any]) -> DailyWeather:
         raw=item,
     )
 
-def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
+def analyze_weather_risks(
+    daily_items: list[DailyWeather],
+    pace: str | None = None,
+) -> list[WeatherRisk]:
     """把天气预报转换成旅行风险提示。"""
 
     risks: list[WeatherRisk] = []
+    pace_note = build_pace_weather_note(pace)
 
     rain_dates = [
         item.forecast_date
@@ -382,7 +404,7 @@ def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
             WeatherRisk(
                 level="medium",
                 title="降水影响",
-                message="建议准备雨具，并为户外景点预留室内备选方案。",
+                message=f"建议准备雨具，并为户外景点预留室内备选方案。{pace_note}",
                 affected_dates=rain_dates,
             )
         )
@@ -397,7 +419,7 @@ def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
             WeatherRisk(
                 level="high",
                 title="高温风险",
-                message="减少正午户外活动，优先安排早晚游览和室内休息。",
+                message=f"减少正午户外活动，优先安排早晚游览和室内休息。{pace_note}",
                 affected_dates=hot_dates,
             )
         )
@@ -412,7 +434,7 @@ def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
             WeatherRisk(
                 level="medium",
                 title="低温风险",
-                message="需要补充保暖衣物，避免把清晨和夜间活动排得过满。",
+                message=f"需要补充保暖衣物，避免把清晨和夜间活动排得过满。{pace_note}",
                 affected_dates=cold_dates,
             )
         )
@@ -427,7 +449,7 @@ def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
             WeatherRisk(
                 level="medium",
                 title="大风风险",
-                message="高处、湖边、海边和缆车类活动需要谨慎安排。",
+                message=f"高处、湖边、海边和缆车类活动需要谨慎安排。{pace_note}",
                 affected_dates=wind_dates,
             )
         )
@@ -442,12 +464,22 @@ def analyze_weather_risks(daily_items: list[DailyWeather]) -> list[WeatherRisk]:
             WeatherRisk(
                 level="low",
                 title="强紫外线",
-                message="建议准备防晒用品，长时间户外活动需要补水和遮阳。",
+                message=f"建议准备防晒用品，长时间户外活动需要补水和遮阳。{pace_note}",
                 affected_dates=uv_dates,
             )
         )
 
     return risks
+
+
+def build_pace_weather_note(pace: str | None) -> str:
+    """根据旅行节奏补充天气对规划的影响。"""
+
+    if pace == "compact":
+        return "当前行程偏紧凑，建议减少连续户外排队点，保留交通和安检缓冲。"
+    if pace == "relaxed":
+        return "当前行程偏轻松，可把受天气影响较大的户外点挪到天气更稳定的时段。"
+    return ""
 
 
 def has_precipitation_risk(item: DailyWeather) -> bool:
@@ -467,6 +499,69 @@ def max_wind_scale(value: str | None) -> int:
     numbers = [int(match) for match in re.findall(r"\d+", value)]
     return max(numbers) if numbers else 0
 
+def parse_travel_date_window(date_range: str | None) -> tuple[date, date] | None:
+    """从出行时间文本中解析日期窗口。"""
+
+    if not date_range:
+        return None
+
+    normalized = normalize_date_text(date_range)
+    matches = re.findall(r"\d{4}-\d{1,2}-\d{1,2}", normalized)
+    if not matches:
+        return None
+
+    dates = [parse_iso_date(match) for match in matches]
+    dates = [item for item in dates if item is not None]
+    if not dates:
+        return None
+
+    start = dates[0]
+    end = dates[-1]
+    if end < start:
+        end = start
+    return start, end
+
+
+def normalize_date_text(value: str) -> str:
+    """把常见中文日期格式转成更容易解析的 ISO-like 文本。"""
+
+    text = value.strip()
+    text = re.sub(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})(?:日|号)?", r"\1-\2-\3", text)
+    text = re.sub(r"(\d{4})[./](\d{1,2})[./](\d{1,2})", r"\1-\2-\3", text)
+    return text
+
+
+def parse_iso_date(value: str) -> date | None:
+    parts = value.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        year, month, day = (int(part) for part in parts)
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def filter_forecast_by_travel_window(
+    daily_items: list[DailyWeather],
+    travel_window: tuple[date, date] | None,
+) -> list[DailyWeather]:
+    """只保留旅行日期窗口内的天气。"""
+
+    if travel_window is None:
+        return daily_items[: min(3, len(daily_items))]
+
+    start, end = travel_window
+    filtered = []
+    for item in daily_items:
+        forecast_date = parse_iso_date(item.forecast_date)
+        if forecast_date is None:
+            continue
+        if start <= forecast_date <= end:
+            filtered.append(item)
+    return filtered
+
+
 def choose_forecast_days(trip_days: int | None) -> str:
     """根据旅行天数选择天气预报窗口。"""
 
@@ -480,6 +575,30 @@ def choose_forecast_days(trip_days: int | None) -> str:
         return "15d"
     return "30d"
 
+
+def choose_forecast_days_for_window(
+    travel_window: tuple[date, date] | None,
+    trip_days: int | None,
+) -> str | None:
+    """根据旅行日期选择能覆盖行程的预报窗口。"""
+
+    if travel_window is None:
+        return choose_forecast_days(trip_days)
+
+    _, end = travel_window
+    days_until_end = (end - date.today()).days + 1
+    if days_until_end <= 3:
+        return "3d"
+    if days_until_end <= 7:
+        return "7d"
+    if days_until_end <= 10:
+        return "10d"
+    if days_until_end <= 15:
+        return "15d"
+    if days_until_end <= 30:
+        return "30d"
+    return None
+
 def is_short_term_forecast_applicable(date_range: str | None) -> bool:
     """判断是否适合调用短期天气预报。
 
@@ -490,6 +609,11 @@ def is_short_term_forecast_applicable(date_range: str | None) -> bool:
 
     if not date_range:
         return True
+
+    travel_window = parse_travel_date_window(date_range)
+    if travel_window:
+        _, end = travel_window
+        return date.today() <= end <= date.today() + timedelta(days=29)
 
     current_year = date.today().year
     years = [int(match) for match in re.findall(r"\d{4}", date_range)]
