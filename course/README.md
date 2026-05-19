@@ -8,6 +8,7 @@
 - `lesson_01_requirement_clarification.md`：LLM 驱动的自然需求澄清。
 - `lesson_02_llm_provider.md`：LLM Provider 与自然澄清生成。
 - `lesson_03_amap_tools.md`：高德地图工具。
+- `lesson_04_weather_tools.md`：和风天气工具。
 
 ## 课程写法
 
@@ -30,6 +31,7 @@
 - Lesson 01：在 `agent/src/travel_agent/clarification.py` 中标注自然澄清状态。
 - Lesson 02：在 `agent/src/travel_agent/llm_provider.py` 中封装 DeepSeek/OpenAI-compatible 调用和自然澄清 prompt。
 - Lesson 03：在 `agent/src/travel_agent/map_tools.py` 中标注高德地图工具边界。
+- Lesson 04：在 `agent/src/travel_agent/weather_tools.py` 中标注和风天气工具边界。
 
 这些注释是搭建指引，不等于完整实现。
 

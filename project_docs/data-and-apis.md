@@ -13,6 +13,8 @@ TravelAgent 按真实 API 优先设计，但当前阶段不实现任何调用代
 | `DEEPSEEK_MODEL` | 默认模型名 |
 | `AMAP_API_KEY` | 高德地图 API key |
 | `QWEATHER_API_KEY` | 和风天气 API key |
+| `QWEATHER_BASE_URL` | 和风天气 API Host |
+| `QWEATHER_AUTH_MODE` | 和风天气认证模式，默认 `auto` |
 
 ## DeepSeek
 
@@ -73,6 +75,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 - 天气信息必须带查询地点和日期。
 - 长期旅行规划只应把远期天气作为趋势参考。
 - 重要风险需提示用户以官方预警为准。
+- 当前工具先使用 GeoAPI 城市查询获取 Location ID，再调用逐日天气预报。
+- 官方新版示例支持 JWT `Authorization: Bearer <token>` 和普通 API KEY；本项目默认 `auto`，并保留 `header_key`、`query_key`、`bearer` 作为显式配置。
 
 ## 酒店、航班、火车票
 
